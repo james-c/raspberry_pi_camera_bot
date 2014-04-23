@@ -5,9 +5,11 @@ import math
 import time
 import Queue
 import mini_driver
+import rover_5
 import json
 
-LEFT_MOTOR_SCALE = 0.9
+LEFT_MOTOR_SCALE = 1.0
+USE_ROVER_5 = True
 
 #--------------------------------------------------------------------------------------------------- 
 class RobotController:
@@ -30,10 +32,16 @@ class RobotController:
         
         self.scriptPath = os.path.dirname( __file__ )
         
-        self.miniDriver = mini_driver.MiniDriver()
-        connected = self.miniDriver.connect()
-        if not connected:
-            raise Exception( "Unable to connect to the mini driver" )
+        if USE_ROVER_5:
+            self.robot = rover_5.Rover5()
+            connected = self.robot.connect()
+            if not connected:
+                raise Exception( "Unable to connect to the rover 5" )
+        else:
+            self.robot = mini_driver.MiniDriver()
+            connected = self.robot.connect()
+            if not connected:
+                raise Exception( "Unable to connect to the mini driver" )
         
         self.commandQueue = Queue.Queue()
         
@@ -63,7 +71,7 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def disconnect( self ):
         
-        self.miniDriver.disconnect()
+        self.robot.disconnect()
     
     #-----------------------------------------------------------------------------------------------
     def tryToLoadConfigFile( self ):
@@ -142,7 +150,7 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def update( self ):
         
-        if not self.miniDriver.isConnected():
+        if not self.robot.isConnected():
             return
         
         curTime = time.time()
@@ -186,8 +194,8 @@ class RobotController:
         self.panAngle = max( self.MIN_ANGLE, min( self.panAngle, self.MAX_ANGLE ) )
         self.tiltAngle = max( self.MIN_ANGLE, min( self.tiltAngle, self.MAX_ANGLE ) )
         
-        # Update the mini driver
-        self.miniDriver.setOutputs(
+        # Update the robot
+        self.robot.setOutputs(
             self.leftMotorSpeed, self.rightMotorSpeed, self.panAngle, self.tiltAngle )
         
         self.lastUpdateTime = curTime
@@ -195,7 +203,7 @@ class RobotController:
         # Send servo settings if needed
         if curTime - self.lastServoSettingsSendTime >= self.TIME_BETWEEN_SERVO_SETTING_UPDATES:
             
-            self.miniDriver.setPanServoLimits( self.panPulseWidthMin, self.panPulseWidthMax )
-            self.miniDriver.setTiltServoLimits( self.tiltPulseWidthMin, self.tiltPulseWidthMax )
+            self.robot.setPanServoLimits( self.panPulseWidthMin, self.panPulseWidthMax )
+            self.robot.setTiltServoLimits( self.tiltPulseWidthMin, self.tiltPulseWidthMax )
  
             self.lastServoSettingsSendTime = curTime

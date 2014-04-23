@@ -48,11 +48,6 @@ COMMAND_ID_SET_TILT_SERVO_LIMITS = 4
 RESPONSE_ID_FIRMWARE_INFO = 1
 RESPONSE_ID_INVALID_COMMAND = 2
 RESPONSE_ID_INVALID_CHECK_SUM = 3
-RESPONSE_ID_BATTERY_READING = 4
-
-ADC_REF_VOLTAGE = 5.0
-BATTERY_VOLTAGE_SCALE = 2.0   # Battery voltage is divided by 2 before it is 
-                              # passed to the ADC so we must undo that
 
 #---------------------------------------------------------------------------------------------------
 class FirmwareInfo:
@@ -198,19 +193,7 @@ class SerialReadProcess( threading.Thread ):
             
             logging.info( "Sent message had invalid checksum" )
             self.responseQueue.put( "Invalid" )
-        
-        elif messageId == RESPONSE_ID_BATTERY_READING:
-            
-            dataBytes = msgBuffer[ 4:-1 ]
-            if len( dataBytes ) < 2:
-                
-                logging.warning( "Got message with invalid number of bytes" )
-                self.responseQueue.put( "Invalid" )
-                
-            else:
-                batteryReading = ord( dataBytes[ 0 ] ) << 8 | ord( dataBytes[ 1 ] )
-                print "Battery voltage is", BATTERY_VOLTAGE_SCALE * ADC_REF_VOLTAGE * float( batteryReading )/1023.0
-        
+             
         else:
             
             logging.warning( "Got unrecognised response id - " + str( messageId ) )
@@ -219,7 +202,7 @@ class SerialReadProcess( threading.Thread ):
 #---------------------------------------------------------------------------------------------------
 class Connection():
     
-    STARTUP_DELAY = 10.0     # Needed to wait for mini driver reset
+    STARTUP_DELAY = 0.5     # Give things a chance to settle
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self, serialPortName, baudRate ):
@@ -304,12 +287,12 @@ class Connection():
         self.serialPort.write( msgBuffer )
     
 #---------------------------------------------------------------------------------------------------
-class MiniDriver():
+class Rover5():
     
-    SERIAL_PORT_NAME = "/dev/ttyUSB0"
+    SERIAL_PORT_NAME = "/dev/ttyS0"
     BAUD_RATE = 57600
-    FIRMWARE_MAIN_FILENAME = "mini_driver_firmware/mini_driver_firmware.ino"
-    BOARD_MODEL = "atmega8"
+    FIRMWARE_MAIN_FILENAME = "rover_5_firmware/rover_5_firmware.ino"
+    BOARD_MODEL = "uno"
     
     MAX_ABS_MOTOR_SPEED = 100
     MIN_PULSE_WIDTH = 200
@@ -329,9 +312,9 @@ class MiniDriver():
     #-----------------------------------------------------------------------------------------------
     def connect( self ):
         
-        """Establishes a connection with the Mini Driver and confirms that it contains
+        """Establishes a connection with the Pi Co-op and confirms that it contains
            the correct version of the firmware. If not then the routine builds the
-           firmware using Ino and uploads it to the Mini Driver"""
+           firmware using Ino and uploads it to the Pi Co-op"""
         
         self.connection = Connection( self.SERIAL_PORT_NAME, self.BAUD_RATE )
         firmwareInfo = self.connection.getFirmwareInfo()
