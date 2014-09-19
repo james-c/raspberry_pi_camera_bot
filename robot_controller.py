@@ -34,6 +34,8 @@ import time
 import Queue
 import mini_driver
 import threading
+import differential_drive_controller
+import csv
 
 #--------------------------------------------------------------------------------------------------- 
 class RobotController:
@@ -52,6 +54,24 @@ class RobotController:
     MOTION_COMMAND_TIMEOUT = 2.0 # If no commands for the motors are recieved in this time then
                                  # the motors (drive and servo) are set to zero speed
     
+    MOVEMENT_STATE_NORMAL = "normal"
+    MOVEMENT_STATE_TURNING = "turning"
+    MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED = "travelling_at_set_speed"
+    MOVEMENT_STATE_DRIVING_STRAIGHT = "driving_straight"
+    
+    TICKS_PER_REVOLUTION = 780.0
+    WHEEL_DIAMETER = 64.0/1000.0        # Diameter in metres
+    WHEEL_CIRCUMFERENCE = math.pi*WHEEL_DIAMETER
+    ENCODER_TICKS_PER_METRE = TICKS_PER_REVOLUTION/WHEEL_CIRCUMFERENCE
+    
+    DEFAULT_SPEED = 0.2     # Metres per second
+    DEFAULT_SPEED_TICKS_PER_SECOND = DEFAULT_SPEED*ENCODER_TICKS_PER_METRE
+    
+    WHEEL_CENTRE_TO_WHEEL_CENTRE_DISTANCE = 0.1     # In metres
+    TURN_CIRCUMFERENCE = math.pi*WHEEL_CENTRE_TO_WHEEL_CENTRE_DISTANCE
+    TURN_METRES_PER_DEGREE = TURN_CIRCUMFERENCE/360.0
+    TURN_ENCODER_TICKS_PER_DEGREE = TURN_METRES_PER_DEGREE*ENCODER_TICKS_PER_METRE
+    
     #-----------------------------------------------------------------------------------------------
     def __init__( self, robotConfig ):
         
@@ -60,6 +80,9 @@ class RobotController:
         if not connected:
             raise Exception( "Unable to connect to the mini driver" )
         
+        self.differentialDriveController = differential_drive_controller.DifferentialDriveController()
+        
+        self.robotMovementState = self.MOVEMENT_STATE_NORMAL
         self.robotConfig = robotConfig
         self.leftMotorSpeed = 0
         self.rightMotorSpeed = 0
@@ -78,6 +101,9 @@ class RobotController:
         self.piSensorModule = None
         self.piSensorReader = None
         self.piSensorDict = {}
+        
+        self.errorValuesList = []
+        self.encoderMoveStartTime = 0.0
     
     #-----------------------------------------------------------------------------------------------
     def __del__( self ):
@@ -95,6 +121,7 @@ class RobotController:
         presetMaxAbsMotorSpeed, presetMaxAbsTurnSpeed = self.miniDriver.getPresetMotorSpeeds()
         
         statusDict = {
+            "robotMovementState" : self.robotMovementState,
             "batteryVoltage" : self.miniDriver.getBatteryVoltageReading().data,
             "presetMaxAbsMotorSpeed" : presetMaxAbsMotorSpeed,
             "presetMaxAbsTurnSpeed" : presetMaxAbsTurnSpeed,
@@ -143,6 +170,10 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def setMotorJoystickPos( self, joystickX, joystickY ):
         
+        # Switch back to 'normal' movement
+        self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
+        
+        # Convert the joystick inputs into motor speeds
         joystickX, joystickY = self.normaliseJoystickData( joystickX, joystickY )
         
         if self.robotConfig.usePresetMotorSpeeds:
@@ -172,6 +203,11 @@ class RobotController:
     
     #-----------------------------------------------------------------------------------------------
     def setMotorSpeeds( self, leftMotorSpeed, rightMotorSpeed ):
+        
+        """Set motor speeds from -100% to 100%"""
+        
+        # Switch back to 'normal' movement
+        self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
         
         if self.robotConfig.usePresetMotorSpeeds:
             
@@ -207,6 +243,91 @@ class RobotController:
         self.tiltSpeed = 0.0
         
         self.lastMotionCommandTime = time.time()
+    
+    #-----------------------------------------------------------------------------------------------
+    def startTurn( self, turnAngle ):
+        
+        """Start the robot turning a given number of degrees. Positive angles turn to the left (anti-clockwise)"""
+        
+        if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:
+            
+            # Get the current encoder readings
+            encodersReading = self.miniDriver.getEncodersReading()
+            leftEncoderReading, rightEncoderReading = encodersReading.data
+            
+            # Calculate distance to move wheels
+            targetLeftEncoderReading = leftEncoderReading - turnAngle*self.TURN_ENCODER_TICKS_PER_DEGREE
+            targetRightEncoderReading = rightEncoderReading + turnAngle*self.TURN_ENCODER_TICKS_PER_DEGREE
+            
+            # Setup the differential drive controller
+            self.differentialDriveController.reset()
+            self.differentialDriveController.setTargets( 
+                targetLeftEncoderReading, targetRightEncoderReading,
+                self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND )
+            
+            self.errorValuesList = []
+            self.encoderMoveStartTime = time.time()
+            
+            self.robotMovementState = self.MOVEMENT_STATE_TURNING
+    
+    #-----------------------------------------------------------------------------------------------
+    def setMotorSpeedsInMetresPerSecond( self, leftMotorSpeed, rightMotorSpeed ):
+        
+        """This set motors speeds routine allows you to control the motor speeds in terms of metres
+        per second"""
+        self.robotMovementState = self.MOVEMENT_STATE_NORMAL
+            
+        # Calculcate our target encoder speeds
+        self.leftMotorTargetTicksPerSecond = 1.0
+        self.rightMotorTargetTicksPerSecond = 1.0
+        
+        self.settingMotorSpeedsWithEncoders = True
+        
+        self.lastMotionCommandTime = time.time()
+    
+    #-----------------------------------------------------------------------------------------------
+    def driveStraight( self, distance ):
+        
+        """Start the robot driving straight for a given distance"""
+        if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:
+            
+            # Get the current encoder readings
+            encodersReading = self.miniDriver.getEncodersReading()
+            leftEncoderReading, rightEncoderReading = encodersReading.data
+            
+            # Calculate distance to move wheels
+            targetLeftEncoderReading = leftEncoderReading + distance*self.ENCODER_TICKS_PER_METRE
+            targetRightEncoderReading = rightEncoderReading + distance*self.ENCODER_TICKS_PER_METRE
+            
+            # Setup the differential drive controller
+            self.differentialDriveController.reset()
+            self.differentialDriveController.setTargets( 
+                targetLeftEncoderReading, targetRightEncoderReading,
+                self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND )
+            
+            self.robotMovementState = self.MOVEMENT_STATE_DRIVING_STRAIGHT
+    
+    #-----------------------------------------------------------------------------------------------
+    def _setRobotMovementState( self, movementState ):
+        
+        if self.robotMovementState != self.MOVEMENT_STATE_NORMAL:
+            
+            # Save out error values to a CSV file
+            outputFilename = "errors_{0}.csv".format( int( time.time() ) )
+            
+            with open( outputFilename, "w" ) as csvFile:
+                dictWriter = csv.DictWriter( csvFile, 
+                    [ "Time", "TargetLeftSpeed", "ActualLeftSpeed", 
+                        "TargetRightSpeed", "ActualRightSpeed",
+                        "TargetLeftPos", "ActualLeftPos",
+                        "TargetRightPos", "ActualRightPos",
+                        "LeftMotorSignal", "RightMotorSignal" ] )
+                dictWriter.writeheader()
+                dictWriter.writerows( self.errorValuesList )
+                
+            self.errorValuesList = []
+        
+        self.robotMovementState = movementState
     
     #-----------------------------------------------------------------------------------------------
     def _loadPiSensorModule( self ):
@@ -259,13 +380,51 @@ class RobotController:
         curTime = time.time()
         timeDiff = min( curTime - self.lastUpdateTime, self.MAX_UPDATE_TIME_DIFF )
         
-        # Turn off the motors if we haven't received a motion command for a while
-        if curTime - self.lastMotionCommandTime > self.MOTION_COMMAND_TIMEOUT:
+        # Update the robot's motor speeds based on its movement state
+        if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:     
+                
+            # Turn off the motors if we haven't received a motion command for a while
+            if curTime - self.lastMotionCommandTime > self.MOTION_COMMAND_TIMEOUT:
 
-            self.leftMotorSpeed = 0.0
-            self.rightMotorSpeed = 0.0
-            self.panSpeed = 0.0
-            self.tiltSpeed = 0.0
+                self.leftMotorSpeed = 0.0
+                self.rightMotorSpeed = 0.0
+                self.panSpeed = 0.0
+                self.tiltSpeed = 0.0
+            
+        elif self.robotMovementState == self.MOVEMENT_STATE_TURNING \
+            or self.robotMovementState == self.MOVEMENT_STATE_DRIVING_STRAIGHT:
+            
+            # Get encoder reading
+            encodersReading = self.miniDriver.getEncodersReading()
+            encodersTime = encodersReading.timestamp
+            leftEncoderReading, rightEncoderReading = encodersReading.data
+            
+            # Calculate motor speeds
+            self.leftMotorSpeed, self.rightMotorSpeed = self.differentialDriveController.update( 
+                leftEncoderReading, rightEncoderReading, encodersTime )
+            
+            errorValues = {}
+            errorValues[ "Time" ] = encodersTime - self.encoderMoveStartTime
+            errorValues[ "TargetLeftSpeed" ] = self.differentialDriveController.debug_TargetLeftSpeed
+            errorValues[ "ActualLeftSpeed" ] = self.differentialDriveController.debug_ActualLeftSpeed
+            errorValues[ "TargetRightSpeed" ] = self.differentialDriveController.debug_TargetRightSpeed
+            errorValues[ "ActualRightSpeed" ] = self.differentialDriveController.debug_ActualRightSpeed
+            errorValues[ "TargetLeftPos" ] = self.differentialDriveController.debug_TargetLeftPos
+            errorValues[ "ActualLeftPos" ] = self.differentialDriveController.debug_ActualLeftPos
+            errorValues[ "TargetRightPos" ] = self.differentialDriveController.debug_TargetRightPos
+            errorValues[ "ActualRightPos" ] = self.differentialDriveController.debug_ActualRightPos
+            errorValues[ "LeftMotorSignal" ] = self.leftMotorSpeed
+            errorValues[ "RightMotorSignal" ] = self.rightMotorSpeed
+
+            self.errorValuesList.append( errorValues )
+            
+            # Revert to the normal movement state if the encoder based movement is complete
+            if self.leftMotorSpeed == 0.0 and self.rightMotorSpeed == 0.0:
+                self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
+
+        else:
+            # Program flow should never get here, but reset to safe state if it does
+            self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
         
         # Update the pan and tilt angles
         self.panAngle += self.panSpeed*timeDiff

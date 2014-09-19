@@ -198,6 +198,32 @@ class ConnectionHandler( sockjs.tornado.SockJSConnection ):
                     
                     if robot != None:
                         robot.setNeckAngles( panAngle, tiltAngle )
+                        
+                elif lineData[ 0 ] == "StartTurn" and len( lineData ) >= 2:
+                    
+                    # Default turn angle to 0.0 degrees and then try to parse argument
+                    turnAngle = 0.0
+                    
+                    try:
+                        turnAngle = float( lineData[ 1 ] )
+                    except Exception:
+                        pass
+                    
+                    if robot != None:
+                        robot.startTurn( turnAngle )   
+                        
+                elif lineData[ 0 ] == "DriveStraight" and len( lineData ) >= 2:
+                    
+                    # Default distance to 0.0 metres and then try to parse argument
+                    distance = 0.0
+                    
+                    try:
+                        distance = float( lineData[ 1 ] )
+                    except Exception:
+                        pass
+                    
+                    if robot != None:
+                        robot.driveStraight( distance )   
 
                     
     #-----------------------------------------------------------------------------------------------
@@ -311,7 +337,7 @@ if __name__ == "__main__":
     http_server.listen( 80 )
     
     robotPeriodicCallback = tornado.ioloop.PeriodicCallback( 
-        robotUpdate, 100, io_loop=tornado.ioloop.IOLoop.instance() )
+        robotUpdate, 10, io_loop=tornado.ioloop.IOLoop.instance() )
     robotPeriodicCallback.start()
     
     cameraStreamerPeriodicCallback = tornado.ioloop.PeriodicCallback( 
