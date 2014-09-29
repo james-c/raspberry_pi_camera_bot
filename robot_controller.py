@@ -33,10 +33,13 @@ import math
 import time
 import Queue
 import mini_driver
+import rover_5
 import threading
 
 #--------------------------------------------------------------------------------------------------- 
 class RobotController:
+    
+    ROBOT_HARDWARE_TYPES = [ mini_driver.MiniDriver, rover_5.Rover5 ]
     
     MIN_ANGLE = 0.0
     MAX_ANGLE = 180.0
@@ -55,10 +58,19 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def __init__( self, robotConfig ):
         
-        self.miniDriver = mini_driver.MiniDriver()
-        connected = self.miniDriver.connect()
-        if not connected:
-            raise Exception( "Unable to connect to the mini driver" )
+        # Check each of the supported robot hardware types in turn
+        for hardwareTypeClass in self.ROBOT_HARDWARE_TYPES:
+            
+            if hardwareTypeClass.isHardwarePresent():
+                
+                self.robotHardware = hardwareTypeClass()
+                connected = self.robotHardware.connect()
+                if not connected:
+                    raise Exception( "Unable to connect to the {0}".format(
+                        hardwareTypeClass.getHardwareName() ) )
+        
+                # We've found a working bit of hardware so we don't need to carry on checking
+                break
         
         self.robotConfig = robotConfig
         self.leftMotorSpeed = 0
@@ -87,33 +99,29 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def disconnect( self ):
         
-        self.miniDriver.disconnect()
+        self.robotHardware.disconnect()
     
     #-----------------------------------------------------------------------------------------------
     def getStatusDict( self ):
         
-        presetMaxAbsMotorSpeed, presetMaxAbsTurnSpeed = self.miniDriver.getPresetMotorSpeeds()
+        presetMaxAbsMotorSpeed, presetMaxAbsTurnSpeed = self.robotHardware.getPresetMotorSpeeds()
         
         statusDict = {
-            "batteryVoltage" : self.miniDriver.getBatteryVoltageReading().data,
+            "hardwareName" : self.robotHardware.getHardwareName(),
             "presetMaxAbsMotorSpeed" : presetMaxAbsMotorSpeed,
             "presetMaxAbsTurnSpeed" : presetMaxAbsTurnSpeed,
             "sensors" : self.getSensorDict()
         }
         
+        if hasattr( self.robotHardware, "getBatteryVoltageReading" ):
+            statusDict[ "batteryVoltage" ] = self.robotHardware.getBatteryVoltageReading().data
+        
         return statusDict
         
     #-----------------------------------------------------------------------------------------------
     def getSensorDict( self ):
-                
-        sensorDict = {
-            "batteryVoltage" : self.miniDriver.getBatteryVoltageReading(),
-            "digital" : self.miniDriver.getDigitalReadings(),
-            "analog" : self.miniDriver.getAnalogReadings(),
-            "ultrasonic" : self.miniDriver.getUltrasonicReading(),
-            "encoders" : self.miniDriver.getEncodersReading(),
-        }
         
+        sensorDict = self.robotHardware.getSensorDict()
         sensorDict.update( self.piSensorDict )
         
         return sensorDict
@@ -147,7 +155,7 @@ class RobotController:
         
         if self.robotConfig.usePresetMotorSpeeds:
             
-            maxAbsMotorSpeed, maxAbsTurnSpeed = self.miniDriver.getPresetMotorSpeeds()
+            maxAbsMotorSpeed, maxAbsTurnSpeed = self.robotHardware.getPresetMotorSpeeds()
             
         else:
             
@@ -175,7 +183,7 @@ class RobotController:
         
         if self.robotConfig.usePresetMotorSpeeds:
             
-            maxAbsMotorSpeed, maxAbsTurnSpeed = self.miniDriver.getPresetMotorSpeeds()
+            maxAbsMotorSpeed, maxAbsTurnSpeed = self.robotHardware.getPresetMotorSpeeds()
             
         else:
             
@@ -253,7 +261,7 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def update( self ):
         
-        if not self.miniDriver.isConnected():
+        if not self.robotHardware.isConnected():
             return
         
         curTime = time.time()
@@ -274,18 +282,18 @@ class RobotController:
         self.panAngle = max( self.MIN_ANGLE, min( self.panAngle, self.MAX_ANGLE ) )
         self.tiltAngle = max( self.MIN_ANGLE, min( self.tiltAngle, self.MAX_ANGLE ) )
         
-        # Update the mini driver
-        self.miniDriver.setOutputs(
+        # Update the robot hardware
+        self.robotHardware.setOutputs(
             self.leftMotorSpeed, self.rightMotorSpeed, self.panAngle, self.tiltAngle )
-        self.miniDriver.update()
+        self.robotHardware.update()
         
         # Send servo settings if needed
         if curTime - self.lastServoSettingsSendTime >= self.TIME_BETWEEN_SERVO_SETTING_UPDATES:
             
-            self.miniDriver.setPanServoLimits( 
+            self.robotHardware.setPanServoLimits( 
                 self.robotConfig.panPulseWidthMin, 
                 self.robotConfig.panPulseWidthMax )
-            self.miniDriver.setTiltServoLimits( 
+            self.robotHardware.setTiltServoLimits( 
                 self.robotConfig.tiltPulseWidthMin, 
                 self.robotConfig.tiltPulseWidthMax )
  
@@ -294,7 +302,10 @@ class RobotController:
         # Send sensor configuration if needed
         if curTime - self.lastSensorConfigurationSendTime >= self.TIME_BETWEEN_SENSOR_CONFIGURATION_UPDATES:
             
-            self.miniDriver.setSensorConfiguration( self.robotConfig.miniDriverSensorConfiguration )
+            if isinstance( self.robotHardware, mini_driver.MiniDriver ):
+                self.robotHardware.setSensorConfiguration( self.robotConfig.miniDriverSensorConfiguration )
+            elif isinstance( self.robotHardware, rover_5.Rover5 ):
+                self.robotHardware.setSensorConfiguration( self.robotConfig.rover5SensorConfiguration )
  
             self.lastSensorConfigurationSendTime = curTime
         

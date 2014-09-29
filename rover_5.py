@@ -34,7 +34,6 @@ import threading
 import time
 import Queue
 import struct
-import subprocess
 
 import ino_uploader
 import sensors
@@ -55,14 +54,12 @@ RESPONSE_ID_INVALID_CHECK_SUM = 3
 RESPONSE_ID_BATTERY_READING = 4
 RESPONSE_ID_SENSOR_READINGS = 5
 
-NUM_ANALOG_PINS = 6
+NUM_ANALOG_PINS = 8
 
 NO_ULTRASONIC_SENSOR_PRESENT = 1000  # Value returned if it looks like no ultrasonic sensor is attached
 MAX_ULTRASONIC_RANGE_CM = 400
 
 ADC_REF_VOLTAGE = 5.0
-BATTERY_VOLTAGE_SCALE = 2.0   # Battery voltage is divided by 2 before it is 
-                              # passed to the ADC so we must undo that
 
 PIN_FUNC_INACTIVE = "inactive"
 PIN_FUNC_DIGITAL_READ = "digital"
@@ -161,7 +158,7 @@ class SensorConfiguration:
                         sensorConfiguration.rightEncoderType = ENCODER_TYPE_SINGLE_OUTPUT
                         
         except Exception as e:
-            logging.error( "Caught exception when parsing Mini Driver SensorConfiguration dictionary" ) 
+            logging.error( "Caught exception when parsing Rover 5 SensorConfiguration dictionary" ) 
             logging.error( str( e ) )
             
         return sensorConfiguration
@@ -398,8 +395,8 @@ class SerialReadProcess( threading.Thread ):
                 
             else:
                 
-                # The RESPONSE_ID_BATTERY_READING is no longer used so we just discard it.
-                # The mini driver firmware should now use RESPONSE_ID_SENSOR_READINGS instead.
+                # The RESPONSE_ID_BATTERY_READING is not used with the Rover 5 so we just 
+                # discard it.
                 pass
         
         elif messageId == RESPONSE_ID_SENSOR_READINGS:
@@ -416,35 +413,33 @@ class SerialReadProcess( threading.Thread ):
                 sensorConfiguration = SensorConfiguration()
                 sensorConfiguration.setFromBytes( dataBytes[ 0 ], dataBytes[ 1 ] )
                 
-                batteryReading = ord( dataBytes[ 2 ] ) << 8 | ord( dataBytes[ 3 ] )
-                batteryVoltage = BATTERY_VOLTAGE_SCALE * ADC_REF_VOLTAGE * float( batteryReading )/1023.0
-        
-                digitalReadings = ord( dataBytes[ 4 ] )
+                digitalReadings = ord( dataBytes[ 2 ] )
                 analogReadings = [
+                    ord( dataBytes[ 3 ] ) << 8 | ord( dataBytes[ 4 ] ),
                     ord( dataBytes[ 5 ] ) << 8 | ord( dataBytes[ 6 ] ),
                     ord( dataBytes[ 7 ] ) << 8 | ord( dataBytes[ 8 ] ),
                     ord( dataBytes[ 9 ] ) << 8 | ord( dataBytes[ 10 ] ),
                     ord( dataBytes[ 11 ] ) << 8 | ord( dataBytes[ 12 ] ),
                     ord( dataBytes[ 13 ] ) << 8 | ord( dataBytes[ 14 ] ),
-                    ord( dataBytes[ 15 ] ) << 8 | ord( dataBytes[ 16 ] )
+                    ord( dataBytes[ 15 ] ) << 8 | ord( dataBytes[ 16 ] ),
+                    ord( dataBytes[ 17 ] ) << 8 | ord( dataBytes[ 18 ] )
                 ]
-                ultrasonicReading = ord( dataBytes[ 17 ] ) << 8 | ord( dataBytes[ 18 ] )
+                ultrasonicReading = ord( dataBytes[ 19 ] ) << 8 | ord( dataBytes[ 20 ] )
                 
-                leftEncoderReading = struct.unpack( ">i", dataBytes[ 19:23 ] )[0]
-                rightEncoderReading = struct.unpack( ">i", dataBytes[ 23:27 ] )[0]
+                leftEncoderReading = struct.unpack( ">i", dataBytes[ 21:25 ] )[0]
+                rightEncoderReading = struct.unpack( ">i", dataBytes[ 25:29 ] )[0]
 
                 # Timestamp the sensor reading with the current time
                 # TODO: This timestamp should be reasonably accurate as it is assumed that the delay introduced
-                # by transmitting the sensor readings from the Mini Driver to the Pi is small. However, the
-                # timestamp will be less accurate for the Ultrasonic sensor which is sampled at just 2HZ (compared
-                # to 100Hz for the other sensors). At some point the mini driver firmware should be updated
+                # by transmitting the sensor readings from the Pi Co-op to the Pi is small. However, the
+                # timestamp will be less accurate for the Ultrasonic sensor which is sampled at just 40HZ (compared
+                # to 100Hz for the other sensors). At some point the Pi Co-op firmware should be updated
                 # to send the delay since the ultrasonic sensor was last read.
                 sensorReadingTimestamp = time.time()
                 
                 self.statusQueue.put( ( "s", 
                     sensorReadingTimestamp, sensorConfiguration,
-                    batteryVoltage, digitalReadings, 
-                    analogReadings, ultrasonicReading,
+                    digitalReadings, analogReadings, ultrasonicReading,
                     leftEncoderReading, rightEncoderReading ) )
         
         else:
@@ -455,7 +450,7 @@ class SerialReadProcess( threading.Thread ):
 #---------------------------------------------------------------------------------------------------
 class Connection():
     
-    STARTUP_DELAY = 10.0     # Needed to wait for mini driver reset
+    STARTUP_DELAY = 1.0     # Give things a chance to settle
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self, serialPortName, baudRate ):
@@ -463,13 +458,12 @@ class Connection():
         self.serialPort = serial.Serial( serialPortName, baudRate, timeout=0 )
         
         self.responseQueue = Queue.Queue()
-        selfROBOT_HARDWARE_TYPES.statusQueue = Queue.Queue()
+        self.statusQueue = Queue.Queue()
         self.serialReadProcess = SerialReadProcess( 
             self.serialPort, self.responseQueue, self.statusQueue )
         self.serialReadProcess.start()
         
         self.sensorConfiguration = SensorConfiguration()
-        self.batteryVoltageReading = sensors.SensorReading( 0.0 )
         self.digitalReadings = sensors.SensorReading( 0 )
         self.analogReadings = sensors.SensorReading( [0] * NUM_ANALOG_PINS )
         self.ultrasonicReading = sensors.SensorReading( 0 )
@@ -499,12 +493,11 @@ class Connection():
             if statusData[ 0 ] == "s":
                 
                 sensorReadingTimestamp = statusData[ 1 ]
-                self.sensorConfiguration = statusData[ 2 ]
-                self.batteryVoltageReading = sensors.SensorReading( statusData[ 3 ], sensorReadingTimestamp )
-                self.digitalReadings = sensors.SensorReading( statusData[ 4 ], sensorReadingTimestamp )
-                self.analogReadings = sensors.SensorReading( statusData[ 5 ], sensorReadingTimestamp )
-                self.ultrasonicReading = sensors.SensorReading( statusData[ 6 ], sensorReadingTimestamp )
-                self.encodersReading = sensors.SensorReading( ( statusData[ 7 ], statusData[ 8 ] ), sensorReadingTimestamp )
+                self.batteryVoltageReading = sensors.SensorReading( statusData[ 2 ], sensorReadingTimestamp )
+                self.digitalReadings = sensors.SensorReading( statusData[ 3 ], sensorReadingTimestamp )
+                self.analogReadings = sensors.SensorReading( statusData[ 4 ], sensorReadingTimestamp )
+                self.ultrasonicReading = sensors.SensorReading( statusData[ 5 ], sensorReadingTimestamp )
+                self.encodersReading = sensors.SensorReading( ( statusData[ 6 ], statusData[ 7 ] ), sensorReadingTimestamp )
     
     #-----------------------------------------------------------------------------------------------
     def sendMessageAskingForFirmwareInfo( self ):
@@ -560,11 +553,6 @@ class Connection():
     def getSensorConfiguration( self ):
         
         return self.sensorConfiguration
-    
-    #-----------------------------------------------------------------------------------------------
-    def getBatteryVoltageReading( self ):
-        
-        return self.batteryVoltageReading
         
     #-----------------------------------------------------------------------------------------------
     def getDigitalReadings( self ):
@@ -626,28 +614,24 @@ class Connection():
 class PresetMotorSpeeds:
     
     #-----------------------------------------------------------------------------------------------
-    def __init__( self, batteryVoltage, maxAbsMotorSpeed, maxAbsTurnSpeed ):
+    def __init__( self, maxAbsMotorSpeed, maxAbsTurnSpeed ):
         
-        self.batteryVoltage = batteryVoltage
         self.maxAbsMotorSpeed = maxAbsMotorSpeed
         self.maxAbsTurnSpeed = maxAbsTurnSpeed
         
 #---------------------------------------------------------------------------------------------------
-class MiniDriver():
+class Rover5():
     
-    SERIAL_PORT_NAME = "/dev/ttyUSB0"
+    SERIAL_PORT_NAME = "/dev/ttyS0"
     BAUD_RATE = 57600
-    FIRMWARE_MAIN_FILENAME = "mini_driver_firmware/mini_driver_firmware.ino"
-    BOARD_MODEL = "atmega8"
+    FIRMWARE_MAIN_FILENAME = "rover_5_firmware/rover_5_firmware.ino"
+    BOARD_MODEL = "uno"
     
     MAX_ABS_MOTOR_SPEED = 100
     MIN_PULSE_WIDTH = 200
     MAX_PULSE_WIDTH = 2800
     
-    PRESET_MOTOR_SPEEDS = [     # Presets should be ordered by voltage from low to high
-        PresetMotorSpeeds( 5.5, 80.0, 50.0 ),
-        PresetMotorSpeeds( 7.5, 60.0, 30.0 )
-    ]
+    PRESET_MOTOR_SPEEDS = PresetMotorSpeeds( 100.0, 50.0 )
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self ):
@@ -666,31 +650,26 @@ class MiniDriver():
     @staticmethod
     def getHardwareName():
         
-        return "Mini Driver"
+        return "Rover 5 Pi Co-op"
     
     #-----------------------------------------------------------------------------------------------
     @staticmethod
     def isHardwarePresent():
         
-        """A quick test that can be run to see if the hardware for the Mini Driver is present."""
-          
-          # Check using lsusb
-        lsusbResult = None
-        try:
-            lsusbResult = subprocess.check_output( [ "lsusb", "-d", "10c4:ea61" ] )
-        except Exception:
-            pass    # Ignore any excpetion thrown
+        """A quick test that can be run to see if the hardware for the Rover5 is present.
          
-        miniDriverPresent = (lsusbResult != None)
+          Currently, we don't have an quick way of testing to see if the required hardware
+          (the Pi Co-op is present). Therefore we just assume that it is. Controlling software
+          should therefore try this class last if possible."""
           
-        return miniDriverPresent
+        return True
     
     #-----------------------------------------------------------------------------------------------
     def connect( self, uploadIfInitialConnectionFails=True ):
         
-        """Establishes a connection with the Mini Driver and confirms that it contains
+        """Establishes a connection with the Pi Co-op and confirms that it contains
            the correct version of the firmware. If not then the routine builds the
-           firmware using Ino and uploads it to the Mini Driver"""
+           firmware using Ino and uploads it to the Pi Co-op"""
         
         self.connection = Connection( self.SERIAL_PORT_NAME, self.BAUD_RATE )
         firmwareInfo = self.connection.getFirmwareInfo()
@@ -758,7 +737,7 @@ class MiniDriver():
     #-----------------------------------------------------------------------------------------------
     def getSensorConfiguration( self ):
         
-        """:return: The current SensorConfiguration of the Mini Driver 
+        """:return: The current SensorConfiguration of the Pi Co-op 
            :rtype: SensorConfiguration"""
         
         result = SensorConfiguration()
@@ -767,26 +746,12 @@ class MiniDriver():
             result = self.connection.getSensorConfiguration()
     
         return result
-    
-    #-----------------------------------------------------------------------------------------------
-    def getBatteryVoltageReading( self ):
-        
-        """:return: A :py:class:`SensorReading` containing the most recent battery voltage read 
-                    from the Mini Driver as a float
-           :rtype: :py:class:`SensorReading`"""
-        
-        result = sensors.SensorReading( 0.0 )
-        
-        if self.connection != None:
-            result = self.connection.getBatteryVoltageReading()
-    
-        return result
         
     #-----------------------------------------------------------------------------------------------
     def getDigitalReadings( self ):
         
         """:return: A :py:class:`SensorReading` containing the most recent set of digital readings 
-                    read from the Mini Driver. The digital readings are returned as a byte with the 
+                    read from the Pi Co-op. The digital readings are returned as a byte with the 
                     bits corresponding to the digital readings from the following pins
                     
                     pin     A5 | A4 | A3 | A2 | A1 | A0 | D13 | D12
@@ -805,8 +770,8 @@ class MiniDriver():
     def getAnalogReadings( self ):
         
         """:return: A :py:class:`SensorReading` containing the most recent set of analog readings 
-                    read from the Mini Driver. There are 6 analog pins that can be read on the Mini 
-                    Driver and so the :py:class:`SensorReading` contains a list of 6 floats.
+                    read from the Pi Co-op. There are 8 analog pins that can be read on the Pi Co-op 
+                    and so the :py:class:`SensorReading` contains a list of 8 floats.
            :rtype: :py:class:`SensorReading`"""
         
         result = sensors.SensorReading( [0] * NUM_ANALOG_PINS )
@@ -820,7 +785,7 @@ class MiniDriver():
     def getUltrasonicReading( self ):
         
         """:return: A :py:class:`SensorReading` containing the most recent ultrasonic distance 
-                    reading from the Mini Driver. The distance is in centimetres and the maximum
+                    reading from the Pi Co-op. The distance is in centimetres and the maximum
                     range is MAX_ULTRASONIC_RANGE_CM. If it looks as if no ultrasonic sensor is 
                     attached then NO_ULTRASONIC_SENSOR_PRESENT will be set as the distance.
                     
@@ -837,7 +802,7 @@ class MiniDriver():
     def getEncodersReading( self ):
         
         """:return: A :py:class:`SensorReading` containing the most recent reading from the 
-                    Mini Driver encoders.
+                    Pi Co-op encoders.
                     
            :rtype: :py:class:`SensorReading`"""
         
@@ -851,12 +816,11 @@ class MiniDriver():
     #-----------------------------------------------------------------------------------------------
     def getSensorDict( self ):
         
-        """:return: A dictionary containing the most recent sensor readings from the Mini Driver.
+        """:return: A dictionary containing the most recent sensor readings from the Pi Co-op.
                     
            :rtype: dict(string,:py:class:`SensorReading`)"""
         
         sensorDict = {
-            "batteryVoltage" : self.getBatteryVoltageReading(),
             "digital" : self.getDigitalReadings(),
             "analog" : self.getAnalogReadings(),
             "ultrasonic" : self.getUltrasonicReading(),
@@ -868,17 +832,8 @@ class MiniDriver():
     #-----------------------------------------------------------------------------------------------
     def getPresetMotorSpeeds( self ):
         
-        batteryVoltage = self.getBatteryVoltageReading().data
-        maxAbsMotorSpeed = 0.0
-        maxAbsTurnSpeed = 0.0
-        
-        for preset in self.PRESET_MOTOR_SPEEDS:
-            
-            maxAbsMotorSpeed = preset.maxAbsMotorSpeed
-            maxAbsTurnSpeed = preset.maxAbsTurnSpeed
-            
-            if batteryVoltage <= preset.batteryVoltage:
-                break
+        maxAbsMotorSpeed = self.PRESET_MOTOR_SPEEDS.maxAbsMotorSpeed
+        maxAbsTurnSpeed = self.PRESET_MOTOR_SPEEDS.maxAbsTurnSpeed
                 
         return maxAbsMotorSpeed, maxAbsTurnSpeed
     

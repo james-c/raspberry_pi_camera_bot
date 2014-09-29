@@ -32,6 +32,7 @@ import logging
 import os.path
 import json
 import mini_driver
+import rover_5
 
 #--------------------------------------------------------------------------------------------------- 
 class RobotConfig:
@@ -56,6 +57,7 @@ class RobotConfig:
         self.customMaxAbsTurnSpeed = 30.0
         self.leftMotorScale = 1.0
         self.miniDriverSensorConfiguration = mini_driver.SensorConfiguration()
+        self.rover5SensorConfiguration = rover_5.SensorConfiguration()
         self.piSensorModuleName = "sensors.default_sensor_reader"
         
         self.tryToLoadConfigFile()
@@ -114,7 +116,11 @@ class RobotConfig:
         if "miniDriverSensorConfiguration" in configDict:
             self.miniDriverSensorConfiguration = mini_driver.SensorConfiguration.createFromDictionary( 
                 configDict[ "miniDriverSensorConfiguration" ] )
-                
+        
+        if "rover5SensorConfiguration" in configDict:
+            self.rover5SensorConfiguration = rover_5.SensorConfiguration.createFromDictionary( 
+                configDict[ "rover5SensorConfiguration" ] )
+        
         if "piSensorModuleName" in configDict:
             self.piSensorModuleName = str( configDict[ "piSensorModuleName" ] )
     
@@ -170,6 +176,7 @@ class RobotConfig:
             "customMaxAbsTurnSpeed" : self.customMaxAbsTurnSpeed,
             "leftMotorScale" : self.leftMotorScale,
             "miniDriverSensorConfiguration" : self.miniDriverSensorConfiguration,
+            "rover5SensorConfiguration" : self.rover5SensorConfiguration,
             "piSensorModuleName" : self.piSensorModuleName,
         }
         
@@ -193,4 +200,5 @@ class RobotConfig:
             + "customMaxAbsTurnSpeed: {0}\n".format( self.customMaxAbsTurnSpeed ) \
             + "leftMotorScale: {0}\n".format( self.leftMotorScale ) \
             + "miniDriverSensorConfiguration: {0}\n".format( self.miniDriverSensorConfiguration ) \
+            + "rover5SensorConfiguration: {0}\n".format( self.rover5SensorConfiguration ) \
             + "piSensorModuleName: {0}".format( self.piSensorModuleName )
