@@ -5,14 +5,7 @@ class PID:
     #-----------------------------------------------------------------------------------------------              
     def __init__( self ):
     
-        # Signal
-        self.signalIn = 0
-        self.signalOut = 0
-        
-        #Signal error
-        self.error = 0
-        self.errorIntegral = 0
-        self.errorDerivative = 0
+        self.reset()
         
         self.acceptableError = 0
 
@@ -22,12 +15,19 @@ class PID:
         self.Kd = 0.0
         
         # Signal min and max constrain
-        self.minSignal = -60
-        self.maxSignal = 60 
+        self.minSignal = -100
+        self.maxSignal = 100 
         
     #-----------------------------------------------------------------------------------------------              
-    def resetErrorValues( self ):
+    def reset( self ):
+        
+        # Signal
+        self.signalIn = 0
+        self.signalOut = 0
+        
+        #Signal error
         self.error = 0
+        self.oldError = 0
         self.errorIntegral = 0
         self.errorDerivative = 0
         
@@ -54,7 +54,7 @@ class PID:
     #-----------------------------------------------------------------------------------------------
     # Control signal value 
 
-    def adjustSignal( self, signalIn, targetValue ):
+    def adjustSignal( self, signalIn, targetValue, timeDelta ):
         
         self.signalIn = signalIn
         self.targetValue = targetValue
@@ -70,11 +70,13 @@ class PID:
             
         else:
             #error Integration
-            self.errorIntegral = self.errorIntegral + self.error
-            #self.errorIntegral = self.constrain(self.errorIntegral, -40, 40)
-            
-            #error Derivatieve
-            self.errorDerivative = self.error - self.errorDerivative
+            if timeDelta > 0.0:
+                self.errorIntegral = self.errorIntegral + self.error*timeDelta
+                #self.errorIntegral = self.constrain(self.errorIntegral, -40, 40)
+                
+                #error Derivatieve
+                self.errorDerivative = (self.error - self.oldError)/timeDelta
+                self.oldError = self.error
             
         #Sum of errors times their gains
         self.signalOut = (self.Kp*self.error) + (self.Ki*self.errorIntegral) + (self.Kd*self.errorDerivative)
