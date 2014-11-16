@@ -224,7 +224,24 @@ class ConnectionHandler( sockjs.tornado.SockJSConnection ):
                     
                     if robot != None:
                         robot.driveStraight( distance )   
-
+                        
+                elif lineData[ 0 ] == "SetMotorSpeedsInMPS" and len( lineData ) >= 3:
+                    
+                    leftMotorSpeed = 0.0
+                    rightMotorSpeed = 0.0
+                    
+                    try:
+                        leftMotorSpeed = float( lineData[ 1 ] )
+                    except Exception:
+                        pass
+                    
+                    try:
+                        rightMotorSpeed = float( lineData[ 2 ] )
+                    except Exception:
+                        pass
+                    
+                    if robot != None:
+                        robot.setMotorSpeedsInMetresPerSecond( leftMotorSpeed, rightMotorSpeed )  
                     
     #-----------------------------------------------------------------------------------------------
     def on_close( self ):

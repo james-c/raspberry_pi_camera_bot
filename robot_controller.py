@@ -38,6 +38,39 @@ import threading
 import differential_drive_controller
 import csv
 
+DUMP_MOVEMENT_CSV = False
+
+#--------------------------------------------------------------------------------------------------- 
+class EncoderParameters:
+    
+    def __init__( self, ticksPerRevolution, wheelDiameter, wheelCentreDistance ):
+        
+        # Store provided values
+        self.ticksPerRevolution = ticksPerRevolution
+        self.wheelDiameter = wheelDiameter
+        self.wheelCentreDistance = wheelCentreDistance
+        
+        # Calculate derived values
+        self.wheelCircumference = math.pi*self.wheelDiameter
+        self.encoderTicksPerMetre = self.ticksPerRevolution/self.wheelCircumference
+        
+        self.turnCircumference = math.pi*self.wheelCentreDistance
+        self.turnMetresPerDegree = self.turnCircumference/360.0
+        self.turnEncoderTicksPerDegree = self.turnMetresPerDegree*self.encoderTicksPerMetre
+
+    #-----------------------------------------------------------------------------------------------
+    def getSpeedAsTicksPerSecond( self, speed ):
+        """Converts a speed from metres per second to ticks per second"""
+        
+        return speed*self.encoderTicksPerMetre
+        
+    #-----------------------------------------------------------------------------------------------
+    def getAccelerationAsTicksPerSecondSquared( self, acceleration ):
+        """Converts an acceleration from metres per second squared to ticks per second squared"""
+        
+        return acceleration*self.encoderTicksPerMetre
+    
+        
 #--------------------------------------------------------------------------------------------------- 
 class RobotController:
     
@@ -61,22 +94,10 @@ class RobotController:
     MOVEMENT_STATE_TURNING = "turning"
     MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED = "travelling_at_set_speed"
     MOVEMENT_STATE_DRIVING_STRAIGHT = "driving_straight"
-    
-    TICKS_PER_REVOLUTION = 780.0
-    WHEEL_DIAMETER = 64.0/1000.0        # Diameter in metres
-    WHEEL_CIRCUMFERENCE = math.pi*WHEEL_DIAMETER
-    ENCODER_TICKS_PER_METRE = TICKS_PER_REVOLUTION/WHEEL_CIRCUMFERENCE
-    
-    DEFAULT_SPEED = 0.5*0.2     # Metres per second
-    MAX_ACC = 0.8     # Metres per second^-2
-    DEFAULT_SPEED_TICKS_PER_SECOND = DEFAULT_SPEED*ENCODER_TICKS_PER_METRE
-    MAX_ACC_TICKS = MAX_ACC*ENCODER_TICKS_PER_METRE
-    
-    WHEEL_CENTRE_TO_WHEEL_CENTRE_DISTANCE = 0.1     # In metres
-    TURN_CIRCUMFERENCE = math.pi*WHEEL_CENTRE_TO_WHEEL_CENTRE_DISTANCE
-    TURN_METRES_PER_DEGREE = TURN_CIRCUMFERENCE/360.0
-    TURN_ENCODER_TICKS_PER_DEGREE = TURN_METRES_PER_DEGREE*ENCODER_TICKS_PER_METRE
-    
+        
+    DEFAULT_SPEED = 0.15         # Metres per second
+    MAX_ACCELERATION = 0.8     # Metres per second^-2
+        
     #-----------------------------------------------------------------------------------------------
     def __init__( self, robotConfig ):
         
@@ -130,6 +151,25 @@ class RobotController:
         self.robotHardware.disconnect()
     
     #-----------------------------------------------------------------------------------------------
+    def calculateEncoderParameters( self ):
+        
+        if self.robotConfig.usePresetEncoderSettings:
+            
+            settingsDict = self.robotHardware.getPresetEncoderSettings()
+            encoderTicksPerRevolution = settingsDict[ "presetEncoderTicksPerRevolution" ]
+            wheelDiameter = settingsDict[ "presetWheelDiameter" ]
+            wheelCentreDistance = settingsDict[ "presetWheelCentreDistance" ]
+            
+        else:
+            
+            encoderTicksPerRevolution = self.robotConfig.customEncoderTicksPerRevolution
+            wheelDiameter = self.robotConfig.customWheelDiameter
+            wheelCentreDistance = self.robotConfig.customWheelCentreDistance
+    
+        return EncoderParameters( 
+            encoderTicksPerRevolution, wheelDiameter, wheelCentreDistance )
+    
+    #-----------------------------------------------------------------------------------------------
     def getStatusDict( self ):
         
         presetMaxAbsMotorSpeed, presetMaxAbsTurnSpeed = self.robotHardware.getPresetMotorSpeeds()
@@ -141,6 +181,8 @@ class RobotController:
             "presetMaxAbsTurnSpeed" : presetMaxAbsTurnSpeed,
             "sensors" : self.getSensorDict()
         }
+        
+        statusDict.update( self.robotHardware.getPresetEncoderSettings() )
         
         if hasattr( self.robotHardware, "getBatteryVoltageReading" ):
             statusDict[ "batteryVoltage" ] = self.robotHardware.getBatteryVoltageReading().data
@@ -257,53 +299,89 @@ class RobotController:
     #-----------------------------------------------------------------------------------------------
     def startTurn( self, turnAngle ):
         
-        """Start the robot turning a given number of degrees. Positive angles turn to the left (anti-clockwise)"""
+        """Start the robot turning a given number of degrees. Positive angles turn to the right (clockwise)"""
         
         if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:
             
             # Get the current encoder readings
-            encodersReading = self.miniDriver.getEncodersReading()
+            encodersReading = self.robotHardware.getEncodersReading()
             leftEncoderReading, rightEncoderReading = encodersReading.data
             
-            e = self.differentialDriveController.getTrajectoryTargetTicks()
-            if e != None:
-                leftEncoderReading, rightEncoderReading = e
+            # TODO: Add option to finish previous move first
+            #e = self.differentialDriveController.getTrajectoryTargetTicks()
+            #if e != None:
+            #    leftEncoderReading, rightEncoderReading = e
+            
+            encoderParameters = self.calculateEncoderParameters()
             
             # Calculate distance to move wheels
-            targetLeftEncoderReading = leftEncoderReading - turnAngle*self.TURN_ENCODER_TICKS_PER_DEGREE
-            targetRightEncoderReading = rightEncoderReading + turnAngle*self.TURN_ENCODER_TICKS_PER_DEGREE
+            numTurnTicks = turnAngle*encoderParameters.turnEncoderTicksPerDegree
             
-            # Setup the differential drive controller
-            #self.differentialDriveController.reset()
-            #self.differentialDriveController.setTargets( 
-                #targetLeftEncoderReading, targetRightEncoderReading,
-                #self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND )
+            targetLeftEncoderReading = leftEncoderReading + numTurnTicks
+            targetRightEncoderReading = rightEncoderReading - numTurnTicks
             
+            # Work out how fast to move and accelerate
+            maxSpeedTicks = encoderParameters.getSpeedAsTicksPerSecond( self.DEFAULT_SPEED )
+            maxAccTicks = encoderParameters.getAccelerationAsTicksPerSecondSquared( self.MAX_ACCELERATION )
             
-            
+            # Setup the differential drive controller            
             self.differentialDriveController.startMove( 
                 leftEncoderReading, rightEncoderReading, 
                 targetLeftEncoderReading, targetRightEncoderReading, 
-                self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND, 
-                self.MAX_ACC_TICKS )
+                maxSpeedTicks, maxSpeedTicks, maxAccTicks )
             
             self.errorValuesList = []
             self.encoderMoveStartTime = time.time()
             
-            self.robotMovementState = self.MOVEMENT_STATE_TURNING
+            self._setRobotMovementState( self.MOVEMENT_STATE_TURNING )
     
     #-----------------------------------------------------------------------------------------------
     def setMotorSpeedsInMetresPerSecond( self, leftMotorSpeed, rightMotorSpeed ):
         
         """This set motors speeds routine allows you to control the motor speeds in terms of metres
-        per second"""
-        self.robotMovementState = self.MOVEMENT_STATE_NORMAL
-            
-        # Calculcate our target encoder speeds
-        self.leftMotorTargetTicksPerSecond = 1.0
-        self.rightMotorTargetTicksPerSecond = 1.0
+        per second. This command must be repeatedly resent as after MOTION_COMMAND_TIMEOUT seconds
+        without any commands, the robot will come to a halt."""
         
-        self.settingMotorSpeedsWithEncoders = True
+        if self.robotMovementState == self.MOVEMENT_STATE_NORMAL \
+            or self.robotMovementState == self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED:
+            
+            alreadyMoving = self.robotMovementState == self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED
+            
+            # Get the current encoder readings
+            encodersReading = self.robotHardware.getEncodersReading()
+            leftEncoderReading, rightEncoderReading = encodersReading.data
+                        
+            encoderParameters = self.calculateEncoderParameters()
+            
+            # Calculate distance to move wheels
+            leftDistance = leftMotorSpeed*self.MOTION_COMMAND_TIMEOUT
+            numLeftMoveTicks = leftDistance*encoderParameters.encoderTicksPerMetre
+            targetLeftEncoderReading = leftEncoderReading + numLeftMoveTicks
+            
+            rightDistance = rightMotorSpeed*self.MOTION_COMMAND_TIMEOUT
+            numRightMoveTicks = rightDistance*encoderParameters.encoderTicksPerMetre
+            targetRightEncoderReading = rightEncoderReading + numRightMoveTicks
+            
+            # Work out how fast to move and accelerate
+            leftMaxSpeedTicks = encoderParameters.getSpeedAsTicksPerSecond( leftMotorSpeed )
+            rightMaxSpeedTicks = encoderParameters.getSpeedAsTicksPerSecond( rightMotorSpeed )
+            maxAccTicks = encoderParameters.getAccelerationAsTicksPerSecondSquared( self.MAX_ACCELERATION )
+            
+            # We only need to accelerate smoothly if we're not already moving
+            accelerateSmoothlyAtStart = False #not alreadyMoving
+            
+            # Setup the differential drive controller
+            self.differentialDriveController.startMove( 
+                leftEncoderReading, rightEncoderReading, 
+                targetLeftEncoderReading, targetRightEncoderReading, 
+                leftMaxSpeedTicks, rightMaxSpeedTicks, maxAccTicks,
+                accelerateSmoothlyAtStart )
+            
+            if not alreadyMoving:
+                self.errorValuesList = []
+                self.encoderMoveStartTime = time.time()
+            
+            self._setRobotMovementState( self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED )
         
         self.lastMotionCommandTime = time.time()
     
@@ -314,56 +392,59 @@ class RobotController:
         if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:
             
             # Get the current encoder readings
-            encodersReading = self.miniDriver.getEncodersReading()
+            encodersReading = self.robotHardware.getEncodersReading()
             leftEncoderReading, rightEncoderReading = encodersReading.data
             
-            e = self.differentialDriveController.getTrajectoryTargetTicks()
-            if e != None:
-                leftEncoderReading, rightEncoderReading = e
+            # TODO: Add option to finish previous move first
+            #e = self.differentialDriveController.getTrajectoryTargetTicks()
+            #if e != None:
+            #    leftEncoderReading, rightEncoderReading = e
+            
+            encoderParameters = self.calculateEncoderParameters()
             
             # Calculate distance to move wheels
-            targetLeftEncoderReading = leftEncoderReading + distance*self.ENCODER_TICKS_PER_METRE
-            targetRightEncoderReading = rightEncoderReading + distance*self.ENCODER_TICKS_PER_METRE
+            numMoveTicks = distance*encoderParameters.encoderTicksPerMetre
+            
+            targetLeftEncoderReading = leftEncoderReading + numMoveTicks
+            targetRightEncoderReading = rightEncoderReading + numMoveTicks
+            
+            # Work out how fast to move and accelerate
+            maxSpeedTicks = encoderParameters.getSpeedAsTicksPerSecond( self.DEFAULT_SPEED )
+            maxAccTicks = encoderParameters.getAccelerationAsTicksPerSecondSquared( self.MAX_ACCELERATION )
             
             # Setup the differential drive controller
-            #self.differentialDriveController.reset()
-            #self.differentialDriveController.setTargets( 
-                #targetLeftEncoderReading, targetRightEncoderReading,
-                #self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND )
-            
-            
             self.differentialDriveController.startMove( 
                 leftEncoderReading, rightEncoderReading, 
                 targetLeftEncoderReading, targetRightEncoderReading, 
-                self.DEFAULT_SPEED_TICKS_PER_SECOND, self.DEFAULT_SPEED_TICKS_PER_SECOND, 
-                self.MAX_ACC_TICKS )
+                maxSpeedTicks, maxSpeedTicks, maxAccTicks )
             
             self.errorValuesList = []
             self.encoderMoveStartTime = time.time()
             
-            self.robotMovementState = self.MOVEMENT_STATE_DRIVING_STRAIGHT
+            self._setRobotMovementState( self.MOVEMENT_STATE_DRIVING_STRAIGHT )
     
     #-----------------------------------------------------------------------------------------------
     def _setRobotMovementState( self, movementState ):
         
         if self.robotMovementState != self.MOVEMENT_STATE_NORMAL:
             
-            # Save out error values to a CSV file
-            outputFilename = "errors_{0}.csv".format( int( time.time() ) )
-            
-            with open( outputFilename, "w" ) as csvFile:
-                dictWriter = csv.DictWriter( csvFile, 
-                    [ "Time", "TargetLeftSpeed", "ActualLeftSpeed", 
-                        "TargetRightSpeed", "ActualRightSpeed",
-                        "TargetLeftPos", "ActualLeftPos",
-                        "TargetRightPos", "ActualRightPos",
-                        "LeftMotorSignal", "RightMotorSignal", "EncoderTime",
-                        "InstantLeftSpeed", "InstantRightSpeed",
-                        "SimpleFilterLeftSpeed", "SimpleFilterRightSpeed" ] )
-                dictWriter.writeheader()
-                dictWriter.writerows( self.errorValuesList )
+            if DUMP_MOVEMENT_CSV:
+                # Save out error values to a CSV file
+                outputFilename = "errors_{0}.csv".format( int( time.time() ) )
                 
-            self.errorValuesList = []
+                with open( outputFilename, "w" ) as csvFile:
+                    dictWriter = csv.DictWriter( csvFile, 
+                        [ "Time", "TargetLeftSpeed", "ActualLeftSpeed", 
+                            "TargetRightSpeed", "ActualRightSpeed",
+                            "TargetLeftPos", "ActualLeftPos",
+                            "TargetRightPos", "ActualRightPos",
+                            "LeftMotorSignal", "RightMotorSignal", "EncoderTime",
+                            "InstantLeftSpeed", "InstantRightSpeed",
+                            "SimpleFilterLeftSpeed", "SimpleFilterRightSpeed" ] )
+                    dictWriter.writeheader()
+                    dictWriter.writerows( self.errorValuesList )
+                    
+                self.errorValuesList = []
         
         self.robotMovementState = movementState
     
@@ -432,10 +513,11 @@ class RobotController:
                 self.tiltSpeed = 0.0
             
         elif self.robotMovementState == self.MOVEMENT_STATE_TURNING \
-            or self.robotMovementState == self.MOVEMENT_STATE_DRIVING_STRAIGHT:
+            or self.robotMovementState == self.MOVEMENT_STATE_DRIVING_STRAIGHT \
+            or self.robotMovementState == self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED:
             
             # Get encoder reading
-            encodersReading = self.miniDriver.getEncodersReading()
+            encodersReading = self.robotHardware.getEncodersReading()
             encodersTime = encodersReading.timestamp
             leftEncoderReading, rightEncoderReading = encodersReading.data
             
@@ -445,40 +527,31 @@ class RobotController:
             
             moveTime = curTime - self.encoderMoveStartTime
             
-            errorValues = {}
-            errorValues[ "Time" ] = moveTime
-            errorValues[ "TargetLeftSpeed" ] = self.differentialDriveController.debug_TargetLeftSpeed
-            errorValues[ "ActualLeftSpeed" ] = self.differentialDriveController.debug_ActualLeftSpeed
-            errorValues[ "TargetRightSpeed" ] = self.differentialDriveController.debug_TargetRightSpeed
-            errorValues[ "ActualRightSpeed" ] = self.differentialDriveController.debug_ActualRightSpeed
-            errorValues[ "TargetLeftPos" ] = self.differentialDriveController.debug_TargetLeftPos
-            errorValues[ "ActualLeftPos" ] = self.differentialDriveController.debug_ActualLeftPos
-            errorValues[ "TargetRightPos" ] = self.differentialDriveController.debug_TargetRightPos
-            errorValues[ "ActualRightPos" ] = self.differentialDriveController.debug_ActualRightPos
-            errorValues[ "LeftMotorSignal" ] = self.leftMotorSpeed
-            errorValues[ "RightMotorSignal" ] = self.rightMotorSpeed
-            errorValues[ "EncoderTime" ] = encodersTime - self.encoderMoveStartTime
-            errorValues[ "InstantLeftSpeed" ] = self.differentialDriveController.debug_InstantLeftSpeed
-            errorValues[ "InstantRightSpeed" ] = self.differentialDriveController.debug_InstantRightSpeed
-            errorValues[ "SimpleFilterLeftSpeed" ] = self.differentialDriveController.debug_SimpleFilterLeftSpeed
-            errorValues[ "SimpleFilterRightSpeed" ] = self.differentialDriveController.debug_SimpleFilterRightSpeed
+            if DUMP_MOVEMENT_CSV:
+                errorValues = {}
+                errorValues[ "Time" ] = moveTime
+                errorValues[ "TargetLeftSpeed" ] = self.differentialDriveController.debug_TargetLeftSpeed
+                errorValues[ "ActualLeftSpeed" ] = self.differentialDriveController.debug_ActualLeftSpeed
+                errorValues[ "TargetRightSpeed" ] = self.differentialDriveController.debug_TargetRightSpeed
+                errorValues[ "ActualRightSpeed" ] = self.differentialDriveController.debug_ActualRightSpeed
+                errorValues[ "TargetLeftPos" ] = self.differentialDriveController.debug_TargetLeftPos
+                errorValues[ "ActualLeftPos" ] = self.differentialDriveController.debug_ActualLeftPos
+                errorValues[ "TargetRightPos" ] = self.differentialDriveController.debug_TargetRightPos
+                errorValues[ "ActualRightPos" ] = self.differentialDriveController.debug_ActualRightPos
+                errorValues[ "LeftMotorSignal" ] = self.leftMotorSpeed
+                errorValues[ "RightMotorSignal" ] = self.rightMotorSpeed
+                errorValues[ "EncoderTime" ] = encodersTime - self.encoderMoveStartTime
+                errorValues[ "InstantLeftSpeed" ] = self.differentialDriveController.debug_InstantLeftSpeed
+                errorValues[ "InstantRightSpeed" ] = self.differentialDriveController.debug_InstantRightSpeed
+                errorValues[ "SimpleFilterLeftSpeed" ] = self.differentialDriveController.debug_SimpleFilterLeftSpeed
+                errorValues[ "SimpleFilterRightSpeed" ] = self.differentialDriveController.debug_SimpleFilterRightSpeed
 
-            self.errorValuesList.append( errorValues )
+                self.errorValuesList.append( errorValues )
             
             # Revert to the normal movement state if the encoder based movement is complete
             if moveTime > self.differentialDriveController.getMoveTime():
-                #self.leftMotorSpeed = 0.0
-                #self.rightMotorSpeed = 0.0
-                #self.differentialDriveController.debug_ActualLeftSpeed = 0.0
-                #self.differentialDriveController.debug_ActualRightSpeed = 0.0
                 
                 self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
-            
-            #if self.leftMotorSpeed == 0.0 and self.rightMotorSpeed == 0.0 \
-                #and self.differentialDriveController.debug_ActualLeftSpeed == 0.0 \
-                #and self.differentialDriveController.debug_ActualRightSpeed == 0.0:
-                    
-                #self._setRobotMovementState( self.MOVEMENT_STATE_NORMAL )
 
         else:
             # Program flow should never get here, but reset to safe state if it does

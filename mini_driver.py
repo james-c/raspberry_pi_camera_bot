@@ -463,7 +463,7 @@ class Connection():
         self.serialPort = serial.Serial( serialPortName, baudRate, timeout=0 )
         
         self.responseQueue = Queue.Queue()
-        selfROBOT_HARDWARE_TYPES.statusQueue = Queue.Queue()
+        self.statusQueue = Queue.Queue()
         self.serialReadProcess = SerialReadProcess( 
             self.serialPort, self.responseQueue, self.statusQueue )
         self.serialReadProcess.start()
@@ -648,6 +648,10 @@ class MiniDriver():
         PresetMotorSpeeds( 5.5, 80.0, 50.0 ),
         PresetMotorSpeeds( 7.5, 60.0, 30.0 )
     ]
+    
+    PRESET_ENCODER_TICKS_PER_REVOLUTION = 768.0
+    PRESET_WHEEL_DIAMETER = 64.0/1000.0        # Diameter in metres
+    PRESET_WHEEL_CENTRE_DISTANCE = 0.1     # In metres
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self ):
@@ -881,6 +885,17 @@ class MiniDriver():
                 break
                 
         return maxAbsMotorSpeed, maxAbsTurnSpeed
+    
+    #-----------------------------------------------------------------------------------------------
+    def getPresetEncoderSettings( self ):
+        
+        settingsDict = {
+            "presetEncoderTicksPerRevolution" : self.PRESET_ENCODER_TICKS_PER_REVOLUTION,
+            "presetWheelDiameter" : self.PRESET_WHEEL_DIAMETER,
+            "presetWheelCentreDistance" : self.PRESET_WHEEL_CENTRE_DISTANCE
+        }
+        
+        return settingsDict
     
     #-----------------------------------------------------------------------------------------------
     def setOutputs( self, leftMotorSpeed, rightMotorSpeed, panAngle, tiltAngle ):

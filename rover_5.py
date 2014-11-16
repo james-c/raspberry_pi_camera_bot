@@ -450,7 +450,7 @@ class SerialReadProcess( threading.Thread ):
 #---------------------------------------------------------------------------------------------------
 class Connection():
     
-    STARTUP_DELAY = 1.0     # Give things a chance to settle
+    STARTUP_DELAY = 2.0     # Give things a chance to settle
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self, serialPortName, baudRate ):
@@ -632,6 +632,10 @@ class Rover5():
     MAX_PULSE_WIDTH = 2800
     
     PRESET_MOTOR_SPEEDS = PresetMotorSpeeds( 100.0, 50.0 )
+    
+    PRESET_ENCODER_TICKS_PER_REVOLUTION = 1000.0/3.0
+    PRESET_WHEEL_DIAMETER = 61.0/1000.0        # Diameter in metres
+    PRESET_WHEEL_CENTRE_DISTANCE = 0.19     # In metres
     
     #-----------------------------------------------------------------------------------------------
     def __init__( self ):
@@ -836,6 +840,17 @@ class Rover5():
         maxAbsTurnSpeed = self.PRESET_MOTOR_SPEEDS.maxAbsTurnSpeed
                 
         return maxAbsMotorSpeed, maxAbsTurnSpeed
+    
+    #-----------------------------------------------------------------------------------------------
+    def getPresetEncoderSettings( self ):
+        
+        settingsDict = {
+            "presetEncoderTicksPerRevolution" : self.PRESET_ENCODER_TICKS_PER_REVOLUTION,
+            "presetWheelDiameter" : self.PRESET_WHEEL_DIAMETER,
+            "presetWheelCentreDistance" : self.PRESET_WHEEL_CENTRE_DISTANCE
+        }
+        
+        return settingsDict
     
     #-----------------------------------------------------------------------------------------------
     def setOutputs( self, leftMotorSpeed, rightMotorSpeed, panAngle, tiltAngle ):

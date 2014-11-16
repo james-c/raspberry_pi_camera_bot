@@ -55,6 +55,10 @@ class RobotConfig:
         self.usePresetMotorSpeeds = True
         self.customMaxAbsMotorSpeed = 50.0
         self.customMaxAbsTurnSpeed = 30.0
+        self.usePresetEncoderSettings = True
+        self.customEncoderTicksPerRevolution = 768.0
+        self.customWheelDiameter = 64.0/1000.0        # Diameter in metres
+        self.customWheelCentreDistance = 0.1     # In metres
         self.leftMotorScale = 1.0
         self.miniDriverSensorConfiguration = mini_driver.SensorConfiguration()
         self.rover5SensorConfiguration = rover_5.SensorConfiguration()
@@ -108,7 +112,29 @@ class RobotConfig:
         if "customMaxAbsTurnSpeed" in configDict:
             self.customMaxAbsTurnSpeed = self.parseDutyCycle( 
                 configDict[ "customMaxAbsTurnSpeed" ] )
-            
+        
+        if "usePresetEncoderSettings" in configDict:
+            data = configDict[ "usePresetEncoderSettings" ]
+            self.usePresetEncoderSettings = (str( data ).lower() == "true")
+        
+        if "customEncoderTicksPerRevolution" in configDict:
+            self.customEncoderTicksPerRevolution = self.parseFloat( 
+                configDict[ "customEncoderTicksPerRevolution" ], 
+                defaultValue=self.customEncoderTicksPerRevolution,
+                testValueFunc= lambda x: x > 0.0 )
+        
+        if "customWheelDiameter" in configDict:
+            self.customWheelDiameter = self.parseFloat( 
+                configDict[ "customWheelDiameter" ], 
+                defaultValue=self.customWheelDiameter,
+                testValueFunc= lambda x: x > 0.0 )
+                
+        if "customWheelCentreDistance" in configDict:
+            self.customWheelCentreDistance = self.parseFloat( 
+                configDict[ "customWheelCentreDistance" ], 
+                defaultValue=self.customWheelCentreDistance,
+                testValueFunc= lambda x: x > 0.0 )
+        
         if "leftMotorScale" in configDict:
             self.leftMotorScale = self.parseDutyCycle( 
                 configDict[ "leftMotorScale" ] )
@@ -123,7 +149,7 @@ class RobotConfig:
         
         if "piSensorModuleName" in configDict:
             self.piSensorModuleName = str( configDict[ "piSensorModuleName" ] )
-    
+
     #-----------------------------------------------------------------------------------------------
     def parsePulseWidth( self, inputData, defaultValue=MIN_PULSE_WIDTH ):
         
@@ -147,6 +173,23 @@ class RobotConfig:
             pass
         
         return max( 0.0, min( result, 100.0 ) )
+        
+    #-----------------------------------------------------------------------------------------------
+    def parseFloat( self, inputData, defaultValue=0.0, testValueFunc=None ):
+        
+        result = defaultValue
+        
+        # Try to parse the input data as a float
+        try:
+            result = float( inputData )
+        except Exception:
+            pass
+        
+        # Test the parsed value. If the test fails then revert to the default value
+        if testValueFunc != None and not testValueFunc( result ):
+            result = defaultValue
+        
+        return result
     
     #-----------------------------------------------------------------------------------------------
     def writeConfigFile( self ):
@@ -174,6 +217,10 @@ class RobotConfig:
             "usePresetMotorSpeeds" : self.usePresetMotorSpeeds,
             "customMaxAbsMotorSpeed" : self.customMaxAbsMotorSpeed,
             "customMaxAbsTurnSpeed" : self.customMaxAbsTurnSpeed,
+            "usePresetEncoderSettings" : self.usePresetEncoderSettings,
+            "customEncoderTicksPerRevolution" : self.customEncoderTicksPerRevolution,
+            "customWheelDiameter" : self.customWheelDiameter,
+            "customWheelCentreDistance" : self.customWheelCentreDistance,
             "leftMotorScale" : self.leftMotorScale,
             "miniDriverSensorConfiguration" : self.miniDriverSensorConfiguration,
             "rover5SensorConfiguration" : self.rover5SensorConfiguration,
@@ -198,6 +245,10 @@ class RobotConfig:
             + "usePresetMotorSpeeds: {0}\n".format( self.usePresetMotorSpeeds ) \
             + "customMaxAbsMotorSpeed: {0}\n".format( self.customMaxAbsMotorSpeed ) \
             + "customMaxAbsTurnSpeed: {0}\n".format( self.customMaxAbsTurnSpeed ) \
+            + "usePresetEncoderSettings: {0}\n".format( self.usePresetEncoderSettings ) \
+            + "customEncoderTicksPerRevolution: {0}\n".format( self.customEncoderTicksPerRevolution ) \
+            + "customWheelDiameter: {0}\n".format( self.customWheelDiameter ) \
+            + "customWheelCentreDistance: {0}\n".format( self.customWheelCentreDistance ) \
             + "leftMotorScale: {0}\n".format( self.leftMotorScale ) \
             + "miniDriverSensorConfiguration: {0}\n".format( self.miniDriverSensorConfiguration ) \
             + "rover5SensorConfiguration: {0}\n".format( self.rover5SensorConfiguration ) \
