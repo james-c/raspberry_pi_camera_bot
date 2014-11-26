@@ -194,7 +194,8 @@
                         shutdownComplete = false;
                     }
                     
-                } else {
+                } else if ( socket.readyState != SockJS.CONNECTING ) {
+                    // Socket isn't open or connecting, so try to open a new one
                     socket = new SockJS( webSocketURL );
                 } }, 1000 );
             

@@ -63,6 +63,8 @@ class RobotConfig:
         self.miniDriverSensorConfiguration = mini_driver.SensorConfiguration()
         self.rover5SensorConfiguration = rover_5.SensorConfiguration()
         self.piSensorModuleName = "sensors.default_sensor_reader"
+        self.webInterfacePath = "www"
+        self.userScriptPath = "scripts"
         
         self.tryToLoadConfigFile()
         
@@ -78,6 +80,7 @@ class RobotConfig:
                     
                     configDict = json.load( configFile )
                     self.readDataFromConfigDict( configDict )
+                    self.writeConfigFile()
                     
             except Exception as e:
                 logging.warning( "Unable to load config file. Exception was " + str( e ) )
@@ -149,6 +152,12 @@ class RobotConfig:
         
         if "piSensorModuleName" in configDict:
             self.piSensorModuleName = str( configDict[ "piSensorModuleName" ] )
+            
+        if "webInterfacePath" in configDict:
+            self.webInterfacePath = str( configDict[ "webInterfacePath" ] )
+            
+        if "userScriptPath" in configDict:
+            self.userScriptPath = str( configDict[ "userScriptPath" ] )
 
     #-----------------------------------------------------------------------------------------------
     def parsePulseWidth( self, inputData, defaultValue=MIN_PULSE_WIDTH ):
@@ -225,6 +234,8 @@ class RobotConfig:
             "miniDriverSensorConfiguration" : self.miniDriverSensorConfiguration,
             "rover5SensorConfiguration" : self.rover5SensorConfiguration,
             "piSensorModuleName" : self.piSensorModuleName,
+            "webInterfacePath" : self.webInterfacePath,
+            "userScriptPath" : self.userScriptPath
         }
         
         return configDict
@@ -252,4 +263,6 @@ class RobotConfig:
             + "leftMotorScale: {0}\n".format( self.leftMotorScale ) \
             + "miniDriverSensorConfiguration: {0}\n".format( self.miniDriverSensorConfiguration ) \
             + "rover5SensorConfiguration: {0}\n".format( self.rover5SensorConfiguration ) \
-            + "piSensorModuleName: {0}".format( self.piSensorModuleName )
+            + "piSensorModuleName: {0}".format( self.piSensorModuleName ) \
+            + "webInterfacePath: {0}".format( self.webInterfacePath ) \
+            + "userScriptPath: {0}".format( self.userScriptPath )

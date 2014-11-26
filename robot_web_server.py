@@ -50,6 +50,7 @@ import sockjs.tornado
 import threading
 import Queue
 import camera_streamer
+import script_handler
 import robot_controller
 import robot_config
 import json
@@ -60,8 +61,10 @@ robot = None
 robotConfig = robot_config.RobotConfig()
 
 cameraStreamer = None
+scriptHandler = None
 scriptPath = os.path.dirname( __file__ )
-webPath = os.path.abspath( scriptPath + "/www" )
+absWebInterfacePath = ""
+absUserScriptPath = ""
 robotConnectionResultQueue = Queue.Queue()
 isClosing = False
 
@@ -241,7 +244,15 @@ class ConnectionHandler( sockjs.tornado.SockJSConnection ):
                         pass
                     
                     if robot != None:
-                        robot.setMotorSpeedsInMetresPerSecond( leftMotorSpeed, rightMotorSpeed )  
+                        robot.setMotorSpeedsInMetresPerSecond( leftMotorSpeed, rightMotorSpeed )
+                        
+                elif lineData[ 0 ] == "RunScript" and len( lineData ) >= 2:
+                    
+                    scriptHandler.startScript( lineData[ 1 ], lineData[ 2: ] )
+                    
+                elif lineData[ 0 ] == "StopRunningScript":
+                    
+                    scriptHandler.stopScript()
                     
     #-----------------------------------------------------------------------------------------------
     def on_close( self ):
@@ -291,7 +302,7 @@ class MainHandler( tornado.web.RequestHandler ):
     
     #------------------------------------------------------------------------------------------------
     def get( self ):
-        self.render( webPath + "/index.html" )
+        self.render( absWebInterfacePath + "/index.html" )
         
 #--------------------------------------------------------------------------------------------------- 
 def robotUpdate():
@@ -319,7 +330,21 @@ def signalHandler( signum, frame ):
     if signum in [ signal.SIGINT, signal.SIGTERM ]:
         global isClosing
         isClosing = True
+
+#---------------------------------------------------------------------------------------------------
+def createStaticFileHandlers( webInterfacePath ):
+    
+    """Creates a list of static file handlers to serve all of the files and directories
+       in a given path"""
+       
+    handlers = []
+    webInterfacePathLength = len( webInterfacePath )
+    for dirpath, dirnames, filenames in os.walk( webInterfacePath ):
         
+        handlers.append( ( dirpath[ webInterfacePathLength: ] + r"/(.*)", 
+            tornado.web.StaticFileHandler, { "path": dirpath } ) )
+    
+    return handlers
         
 #--------------------------------------------------------------------------------------------------- 
 if __name__ == "__main__":
@@ -327,21 +352,35 @@ if __name__ == "__main__":
     signal.signal( signal.SIGINT, signalHandler )
     signal.signal( signal.SIGTERM, signalHandler )
     
+    # Work out where the web interface is stored
+    webInterfacePath = robotConfig.webInterfacePath
+    if os.path.isabs( webInterfacePath ):
+        absWebInterfacePath = webInterfacePath
+    else:
+        absWebInterfacePath = os.path.abspath( scriptPath + "/" + webInterfacePath )
+        
+    logging.info( "Web interface path is " + absWebInterfacePath )
+    
+    # Work out where the user scripts are stored
+    userScriptPath = robotConfig.userScriptPath
+    if os.path.isabs( userScriptPath ):
+        absUserScriptPath = userScriptPath
+    else:
+        absUserScriptPath = os.path.abspath( scriptPath + "/" + userScriptPath )
+        
+    logging.info( "User script path is " + absUserScriptPath )
+    
     # Create the configuration for the web server
     router = sockjs.tornado.SockJSRouter( 
         ConnectionHandler, '/robot_control' )
-    application = tornado.web.Application( router.urls + [ 
-        ( r"/", MainHandler ), 
-        ( r"/(.*)", tornado.web.StaticFileHandler, { "path": webPath } ),
-        ( r"/css/(.*)", tornado.web.StaticFileHandler, { "path": webPath + "/css" } ),
-        ( r"/css/images/(.*)", tornado.web.StaticFileHandler, { "path": webPath + "/css/images" } ),
-        ( r"/images/(.*)", tornado.web.StaticFileHandler, { "path": webPath + "/images" } ),
-        ( r"/js/(.*)", tornado.web.StaticFileHandler, { "path": webPath + "/js" } ) ] )
-    
-    #( r"/(.*)", tornado.web.StaticFileHandler, {"path": scriptPath + "/www" } ) ] \
+    application = tornado.web.Application( router.urls \
+        + [ ( r"/", MainHandler ) ] + createStaticFileHandlers( absWebInterfacePath ) )
     
     # Create a camera streamer
     cameraStreamer = camera_streamer.CameraStreamer()
+    
+    # Create a script handler
+    scriptHandler = script_handler.ScriptHandler( userScriptPath )
     
     # Start connecting to the robot asyncronously
     robotConnectionThread = threading.Thread( target=createRobot, 
@@ -361,6 +400,10 @@ if __name__ == "__main__":
         cameraStreamer.update, 1000, io_loop=tornado.ioloop.IOLoop.instance() )
     cameraStreamerPeriodicCallback.start()
     
+    scriptHandlerPeriodicCallback = tornado.ioloop.PeriodicCallback( 
+        scriptHandler.update, 1000, io_loop=tornado.ioloop.IOLoop.instance() )
+    scriptHandlerPeriodicCallback.start()
+    
     tornado.ioloop.IOLoop.instance().start()
     
     # Shut down code
@@ -374,3 +417,4 @@ if __name__ == "__main__":
             robot.disconnect()
             
     cameraStreamer.stopStreaming()
+    scriptHandler.stopScript()
