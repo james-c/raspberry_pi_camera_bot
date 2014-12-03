@@ -138,6 +138,7 @@ class ConnectionHandler( sockjs.tornado.SockJSConnection ):
                     
                     if robot != None:
                         statusDict = robot.getStatusDict()
+                        statusDict[ "activeScriptName" ] = str( scriptHandler.getActiveScriptName() )
                     
                     self.send( json.dumps( statusDict, default=lambda o: o.__dict__, separators=(',',':') ) )
                 
@@ -245,7 +246,31 @@ class ConnectionHandler( sockjs.tornado.SockJSConnection ):
                     
                     if robot != None:
                         robot.setMotorSpeedsInMetresPerSecond( leftMotorSpeed, rightMotorSpeed )
-                        
+                
+                elif lineData[ 0 ] == "MoveToEncoderTargets" and len( lineData ) >= 4:
+                    
+                    targetLeftEncoder = 0.0
+                    targetRightEncoder = 0.0
+                    allowedTime = 0.0
+                    
+                    try:
+                        targetLeftEncoder = float( lineData[ 1 ] )
+                    except Exception:
+                        pass
+                    
+                    try:
+                        targetRightEncoder = float( lineData[ 2 ] )
+                    except Exception:
+                        pass
+                    
+                    try:
+                        allowedTime = float( lineData[ 3 ] )
+                    except Exception:
+                        pass
+                    
+                    if robot != None:
+                        robot.moveToEncoderTargets( targetLeftEncoder, targetRightEncoder, allowedTime )
+                
                 elif lineData[ 0 ] == "RunScript" and len( lineData ) >= 2:
                     
                     scriptHandler.startScript( lineData[ 1 ], lineData[ 2: ] )

@@ -131,8 +131,13 @@ class ScriptHandler:
         
         else:
             
-            logging.warning( "Attempted to start script {0} when " \
-                + "script {1} was already running".format( scriptName, self.activeScriptName ) )
+            logging.warning( "Attempted to start script {0} when ".format( scriptName ) \
+                + "script {0} was already running".format( self.activeScriptName ) )
+    
+    #-----------------------------------------------------------------------------------------------
+    def getActiveScriptName( self ):
+        
+        return self.activeScriptName
     
     #-----------------------------------------------------------------------------------------------
     def update( self ):
@@ -152,5 +157,7 @@ class ScriptHandler:
 
         if self.scriptProcess != None:
             self.scriptProcess.terminate()
+            
+            logging.info( "Stopped script {0}".format( self.activeScriptName ) )
             self.scriptProcess = None
             self.activeScriptName = None

@@ -38,7 +38,7 @@ import threading
 import differential_drive_controller
 import csv
 
-DUMP_MOVEMENT_CSV = False
+DUMP_MOVEMENT_TO_CSV = False
 
 #--------------------------------------------------------------------------------------------------- 
 class EncoderParameters:
@@ -94,6 +94,7 @@ class RobotController:
     MOVEMENT_STATE_TURNING = "turning"
     MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED = "travelling_at_set_speed"
     MOVEMENT_STATE_DRIVING_STRAIGHT = "driving_straight"
+    MOVEMENT_STATE_ENCODER_TARGET = "encoder_target"
         
     DEFAULT_SPEED = 0.15         # Metres per second
     MAX_ACCELERATION = 0.8     # Metres per second^-2
@@ -424,11 +425,27 @@ class RobotController:
             self._setRobotMovementState( self.MOVEMENT_STATE_DRIVING_STRAIGHT )
     
     #-----------------------------------------------------------------------------------------------
+    def moveToEncoderTargets( self, targetLeftEncoder, targetRightEncoder, allowedTime ):
+        
+        """Drives the wheels of the robot towards the target encoder positions as quickly
+           as possible using the current PID parameters"""
+        if self.robotMovementState == self.MOVEMENT_STATE_NORMAL:
+            
+            # Setup the differential drive controller
+            self.differentialDriveController.startDirectMove( 
+                targetLeftEncoder, targetRightEncoder, allowedTime )
+            
+            self.errorValuesList = []
+            self.encoderMoveStartTime = time.time()
+            
+            self._setRobotMovementState( self.MOVEMENT_STATE_ENCODER_TARGET )
+    
+    #-----------------------------------------------------------------------------------------------
     def _setRobotMovementState( self, movementState ):
         
         if self.robotMovementState != self.MOVEMENT_STATE_NORMAL:
             
-            if DUMP_MOVEMENT_CSV:
+            if DUMP_MOVEMENT_TO_CSV:
                 # Save out error values to a CSV file
                 outputFilename = "errors_{0}.csv".format( int( time.time() ) )
                 
@@ -438,9 +455,11 @@ class RobotController:
                             "TargetRightSpeed", "ActualRightSpeed",
                             "TargetLeftPos", "ActualLeftPos",
                             "TargetRightPos", "ActualRightPos",
+                            "LeftError", "RightError", "ErrorDiff",
                             "LeftMotorSignal", "RightMotorSignal", "EncoderTime",
                             "InstantLeftSpeed", "InstantRightSpeed",
-                            "SimpleFilterLeftSpeed", "SimpleFilterRightSpeed" ] )
+                            "SimpleFilterLeftSpeed", "SimpleFilterRightSpeed",
+                            "UnbalancedLeft", "UnbalancedRight" ] )
                     dictWriter.writeheader()
                     dictWriter.writerows( self.errorValuesList )
                     
@@ -514,7 +533,8 @@ class RobotController:
             
         elif self.robotMovementState == self.MOVEMENT_STATE_TURNING \
             or self.robotMovementState == self.MOVEMENT_STATE_DRIVING_STRAIGHT \
-            or self.robotMovementState == self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED:
+            or self.robotMovementState == self.MOVEMENT_STATE_TRAVELLING_AT_SET_SPEED \
+            or self.robotMovementState == self.MOVEMENT_STATE_ENCODER_TARGET:
             
             # Get encoder reading
             encodersReading = self.robotHardware.getEncodersReading()
@@ -527,7 +547,7 @@ class RobotController:
             
             moveTime = curTime - self.encoderMoveStartTime
             
-            if DUMP_MOVEMENT_CSV:
+            if DUMP_MOVEMENT_TO_CSV:
                 errorValues = {}
                 errorValues[ "Time" ] = moveTime
                 errorValues[ "TargetLeftSpeed" ] = self.differentialDriveController.debug_TargetLeftSpeed
@@ -545,7 +565,12 @@ class RobotController:
                 errorValues[ "InstantRightSpeed" ] = self.differentialDriveController.debug_InstantRightSpeed
                 errorValues[ "SimpleFilterLeftSpeed" ] = self.differentialDriveController.debug_SimpleFilterLeftSpeed
                 errorValues[ "SimpleFilterRightSpeed" ] = self.differentialDriveController.debug_SimpleFilterRightSpeed
-
+                errorValues[ "UnbalancedLeft" ] = self.differentialDriveController.debug_UnbalancedLeft
+                errorValues[ "UnbalancedRight" ] = self.differentialDriveController.debug_UnbalancedRight
+                errorValues[ "LeftError" ] = self.differentialDriveController.debug_LeftError
+                errorValues[ "RightError" ] = self.differentialDriveController.debug_RightError
+                errorValues[ "ErrorDiff" ] = self.differentialDriveController.debug_ErrorDiff
+                
                 self.errorValuesList.append( errorValues )
             
             # Revert to the normal movement state if the encoder based movement is complete

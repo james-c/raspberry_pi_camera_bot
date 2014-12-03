@@ -132,6 +132,25 @@ class TrajectoryGenerator:
                     + speed*decTime + 0.5*dec*decTime*decTime
         
         return velocity, pos
+
+#---------------------------------------------------------------------------------------------------
+class StepTrajectoryGenerator:
+    
+    #-----------------------------------------------------------------------------------------------
+    def __init__( self, targetEncoderTicks, allowedTime ):
+        
+        self.targetEncoderTicks = targetEncoderTicks
+        self.allowedTime = allowedTime
+        
+    #-----------------------------------------------------------------------------------------------
+    def getTrajectoryLength( self ):
+        
+        return self.allowedTime
+    
+    #-----------------------------------------------------------------------------------------------
+    def getVelocityAndPos( self, trajectoryTime ):
+        
+        return 0.0, self.targetEncoderTicks
         
 #---------------------------------------------------------------------------------------------------
 class DifferentialDriveController:
@@ -159,19 +178,22 @@ class DifferentialDriveController:
         # TODO: Expose these as configuration options
         # Rover 5
         self.controlLoopLeft = pid.PID()
-        self.controlLoopLeft.setKp( 1.8 )
-        self.controlLoopLeft.setKi( 0.005 ) #0.0005 )
-        self.controlLoopLeft.setKd( 0.01 ) #0.005 )
+        self.controlLoopLeft.setKp( 1.2 ) #1.8
+        self.controlLoopLeft.setKi( 0.0 ) #0.0005 )
+        self.controlLoopLeft.setKd( 0.1 ) #0.005 )
     
         self.controlLoopRight = pid.PID()
-        self.controlLoopRight.setKp( 1.8 )
-        self.controlLoopRight.setKi( 0.005 ) #0.0005 )
-        self.controlLoopRight.setKd( 0.01 ) #0.005 )
+        self.controlLoopRight.setKp( 1.2 ) #1.8
+        self.controlLoopRight.setKi( 0.0 ) #0.0005 )
+        self.controlLoopRight.setKd( 0.1 ) #0.005 )
+        
+        self.controlLoopBalance = pid.PID()
+        self.controlLoopBalance.setKp( -0.0 ) #5.0 )
+        self.controlLoopBalance.setKi( 0.0 )
+        self.controlLoopBalance.setKd( 0.0 )
         
         self.leftTrajectoryGenerator = None
         self.rightTrajectoryGenerator = None
-
-        self.maxAccDec = 1000.0
     
         self.reset()
 
@@ -213,19 +235,15 @@ class DifferentialDriveController:
     #-----------------------------------------------------------------------------------------------
     def startMove( self, startEncoderTicksLeft, startEncoderTicksRight, 
         targetEncoderTicksLeft, targetEncoderTicksRight, 
-        maxSpeedLeft, maxSpeedRight, maxAccDec, accelerateSmoothlyAtStart=True ):
+        maxSpeedLeft, maxSpeedRight, maxAccDec, 
+        accelerateSmoothlyAtStart=True ):
     
         """All speeds are in ticks per second"""
     
         self.reset()
     
-        self.startEncoderTicksLeft = startEncoderTicksLeft
-        self.startEncoderTicksRight = startEncoderTicksRight
         self.targetEncoderTicksLeft = targetEncoderTicksLeft
-        self.targetEncoderTicksRight = targetEncoderTicksRight
-        self.maxSpeedLeft = abs( maxSpeedLeft )
-        self.maxSpeedRight = abs( maxSpeedRight )
-        self.maxAccDec = abs( maxAccDec )            
+        self.targetEncoderTicksRight = targetEncoderTicksRight          
         
         self.leftTrajectoryGenerator = TrajectoryGenerator(
             startEncoderTicksLeft, targetEncoderTicksLeft, maxSpeedLeft, 
@@ -233,6 +251,13 @@ class DifferentialDriveController:
         self.rightTrajectoryGenerator = TrajectoryGenerator(
             startEncoderTicksRight, targetEncoderTicksRight, maxSpeedLeft, 
             maxAccDec, accelerateSmoothlyAtStart )
+            
+    #-----------------------------------------------------------------------------------------------
+    def startDirectMove( self, targetEncoderTicksLeft, targetEncoderTicksRight, allowedTime ):
+        
+        self.reset()
+        self.leftTrajectoryGenerator = StepTrajectoryGenerator( targetEncoderTicksLeft, allowedTime )
+        self.rightTrajectoryGenerator = StepTrajectoryGenerator( targetEncoderTicksRight, allowedTime )
     
     #-----------------------------------------------------------------------------------------------
     def getMoveTime( self ):
@@ -295,16 +320,34 @@ class DifferentialDriveController:
             instantSpeedLeft = float( leftEncoderTicksDelta ) / timeDelta
             instantSpeedRight = float( rightEncoderTicksDelta ) / timeDelta 
         
+        # Calculate the target speed and position based on the position in the trajectory
         trajectoryTime = currentTime - self.startTime
         targetSpeedLeft, self.targetEncoderTicksLeft = \
             self.leftTrajectoryGenerator.getVelocityAndPos( trajectoryTime )
         targetSpeedRight, self.targetEncoderTicksRight = \
             self.rightTrajectoryGenerator.getVelocityAndPos( trajectoryTime )
         
+        # Use the left and right PID loops to reach the target position
         self.motorSignalLeft = self.controlLoopLeft.adjustSignal( 
             leftEncoderReading, self.targetEncoderTicksLeft, timeDelta )
         self.motorSignalRight = self.controlLoopRight.adjustSignal( 
             rightEncoderReading, self.targetEncoderTicksRight, timeDelta )
+        
+        self.debug_UnbalancedLeft = self.motorSignalLeft
+        self.debug_UnbalancedRight = self.motorSignalRight
+        
+        # A balancing PID loop attempts to keep the error of the left and right loops
+        # the same. This is to try and stop one wheel getting ahead of the other
+        # NOTE: This works if the left and right trajectory are quite similar, but
+        # may have unintended consequences if they're very different. We may need to
+        # add in an option to disable the balancing PID loop.
+        leftError = self.targetEncoderTicksLeft - leftEncoderReading
+        rightError = self.targetEncoderTicksRight - rightEncoderReading
+        balancingSignal = self.controlLoopBalance.adjustSignal(
+            leftError, rightError, timeDelta )
+            
+        self.motorSignalLeft += balancingSignal
+        self.motorSignalRight -= balancingSignal
         
         # Constrain the motor signal 
         self.motorSignalLeft = max( -100, min( self.motorSignalLeft, 100 ) )
@@ -325,5 +368,8 @@ class DifferentialDriveController:
         self.debug_InstantRightSpeed = instantSpeedRight
         self.debug_SimpleFilterLeftSpeed = simpleFilterSpeedLeft
         self.debug_SimpleFilterRightSpeed = simpleFilterSpeedRight
+        self.debug_LeftError = leftError
+        self.debug_RightError = rightError
+        self.debug_ErrorDiff = rightError - leftError
         
         return self.motorSignalLeft, self.motorSignalRight
